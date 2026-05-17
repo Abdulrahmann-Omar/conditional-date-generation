@@ -1,24 +1,28 @@
-# Generative Date Models
+# Generative date models
 
-GANs course assignment 2. The task: given four conditions (day of week, month,
-leap year flag, decade), generate a date that satisfies all of them.
+GANs course, assignment 2. Given four conditions (day of week, month, leap-year
+flag, decade), generate a date that satisfies all of them.
 
-I trained four different models for this and put them side by side so the
-comparison is easy. Two of them are from the course (a Conditional GAN and a
-Conditional VAE). The other two are seq2seq models (a Transformer and an LSTM).
-The Transformer is what `predict.py` uses by default since it was the most
-reliable in my runs, but any of the four can be selected with `--model`.
+I built four models so I could compare them. Two come from the course (a
+Conditional GAN, which the assignment requires, and a Conditional VAE). The
+other two are seq2seq models that aren't in the course: a Transformer and an
+LSTM. The Transformer is what `predict.py` calls by default because it was the
+most consistent on the weekday check in my runs, but you can pick any of the
+four with `--model`.
 
-## What's in the repo
+The thing that took me the longest wasn't actually the models. It was figuring
+out a metric that made sense. More on that below.
+
+## What's in here
 
 ```
 .
 ├── data/
-│   ├── data.txt              # ~146k training examples
-│   └── example_input.txt     # 1464 example conditions (no labels)
+│   ├── data.txt              # ~146k labelled examples
+│   └── example_input.txt     # 1464 unlabelled queries
 ├── model/
 │   ├── predict.py            # inference entry point
-│   ├── utils/                # tokenizer, dataset, evaluation
+│   ├── utils/                # tokenizer, dataset, CSR metric
 │   ├── gan/                  # Conditional GAN
 │   ├── vae/                  # Conditional VAE
 │   ├── transformer/          # Seq2Seq Transformer
@@ -27,8 +31,9 @@ reliable in my runs, but any of the four can be selected with `--model`.
 └── README.md
 ```
 
-Each model folder has a `model.py` (the architecture), a `train.py` (the
-training loop) and a `weights/` directory where checkpoints get saved.
+Inside each model folder there's a `model.py` for the architecture, a
+`train.py` that handles the training loop, and a `weights/` folder where
+checkpoints land.
 
 ## Setup
 
@@ -37,39 +42,40 @@ conda env create -f environment.yml
 conda activate dates_gen
 ```
 
-If you don't have a CUDA GPU, remove the `pytorch-cuda` line from
-`environment.yml` before creating the env. Training on CPU is slow but works.
+No CUDA GPU? Strip the `pytorch-cuda` line out of `environment.yml` before
+running the create command. Training on CPU works, it's just slow.
 
 ## Training
 
-Run from the `model/` directory. Each model has its own training script.
+Run from inside `model/`:
 
 ```bash
-cd model
-python -m gan.train          # Conditional GAN
-python -m vae.train          # Conditional VAE
-python -m transformer.train  # Seq2Seq Transformer
-python -m lstm.train         # Seq2Seq LSTM
+python -m gan.train
+python -m vae.train
+python -m transformer.train
+python -m lstm.train
 ```
 
-Every epoch the script computes the validation **Condition Satisfaction Rate**:
-the percentage of generated dates that pass all four condition checks. The best
-checkpoint by CSR gets saved to `<model>/weights/best.pt`.
+Each epoch prints the validation **CSR** (condition satisfaction rate): the
+share of generated dates that pass all four condition checks. The best
+checkpoint by CSR ends up at `<model>/weights/best.pt`.
 
-I went with CSR instead of accuracy because there are many valid dates per
-condition set. Asking the model to reproduce the exact one from the dataset
-felt like the wrong metric.
+I went with CSR over accuracy because lots of different dates satisfy the same
+condition set, so asking the model to recover the exact one from the training
+data didn't really test what we care about. CSR tests the thing we actually
+want: did the model produce a date that fits the conditions, regardless of
+which one.
 
 ## Prediction
 
-Once you have a `best.pt` for a model, run:
+Once a model has a saved `best.pt`:
 
 ```bash
 cd model
 python predict.py -i ../data/example_input.txt -o ../outputs/preds.txt
 ```
 
-To use a specific model:
+To use a specific model instead of the default:
 
 ```bash
 python predict.py -i ../data/example_input.txt -o ../outputs/preds.txt --model vae
@@ -77,26 +83,28 @@ python predict.py -i ../data/example_input.txt -o ../outputs/preds.txt --model g
 python predict.py -i ../data/example_input.txt -o ../outputs/preds.txt --model lstm
 ```
 
-If the model ever returns something invalid (a wrong weekday, day 31 in April,
-etc.) the script falls back to a small calendar search that finds a valid date
-matching the conditions. The fallback only fires when the model fails, and the
-script prints how many times it kicked in.
+If the model produces something invalid (wrong weekday, April 31st, that kind
+of thing), the script runs a small calendar search to find a date that does
+fit the conditions and uses that instead. It prints how many times it had to
+do this, which is a nice sanity check on the model's quality.
 
 ## Input format
 
-One line per query, four conditions wrapped in brackets:
+One line per query, four bracketed tokens:
 
 ```
 [DAY] [MONTH] [LEAP] [DECADE]
 ```
 
-- `DAY` is one of `MON TUE WED THU FRI SAT SUN`
-- `MONTH` is one of `JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC`
-- `LEAP` is `True` or `False`
-- `DECADE` is the first three digits of the year (`180` for 1800-1809,
-  `220` for 2200-2209)
+- `DAY`: `MON TUE WED THU FRI SAT SUN`
+- `MONTH`: `JAN FEB MAR ... DEC`
+- `LEAP`: `True` or `False`
+- `DECADE`: the first three digits of the year (`180` covers 1800-1809,
+  `220` covers 2200-2209)
 
-### Sample input (from `data/example_input.txt`)
+### Sample input
+
+The first ten lines of `data/example_input.txt`:
 
 ```
 [WED] [JAN] [False] [180]
@@ -113,8 +121,8 @@ One line per query, four conditions wrapped in brackets:
 
 ## Output format
 
-Same four bracketed tokens, with a `d-m-yyyy` date appended (no zero-padding on
-day or month).
+Same conditions, with a `d-m-yyyy` date stuck on the end. Day and month aren't
+zero-padded.
 
 ### Sample output
 
@@ -131,72 +139,78 @@ day or month).
 [TUE] [MAR] [False] [189] 4-3-1890
 ```
 
-You can verify any line by hand:
+Pick any line and check by hand. `1-1-1800` was a Wednesday in January, the
+year isn't a leap year, the decade is 1800-1809. `1-1-2000` was a Saturday,
+January, 2000 *is* a leap year (divisible by 400), still in the 2000s decade.
+Both work.
 
-- `1-1-1800` was a Wednesday, January, not a leap year, falls in the 1800s.
-- `1-1-2000` was a Saturday, January, 2000 was a leap year, falls in the 2000s.
-
-Both check out.
-
-## How the models work
+## The models
 
 ### Conditional GAN
 
-Generator takes a noise vector plus the four condition embeddings and outputs
-soft distributions over day-of-month and the last digit of the year. The
-discriminator sees the date and the conditions and decides whether the pair
-looks real. Standard BCE loss with a bit of label smoothing on the real side.
-G trains twice per D step because D tends to overpower it otherwise.
+Noise vector plus four condition embeddings go in. Out come soft distributions
+over day-of-month and the last digit of the year. The discriminator gets the
+date and the conditions and scores how real it looks. Standard BCE loss,
+label-smoothed reals at 0.9 to keep D from getting cocky. G updates twice per
+D step because in early experiments D was running away with it otherwise.
 
-I didn't predict month or decade explicitly because the conditions already give
-them, so the model only has to learn what day and what year-digit work
-together for a given weekday/leap/month/decade combo.
+I'm not asking the model to predict month or decade. The conditions already
+pin those down, so the generator only learns the part that's actually
+unknown: day and the trailing year digit. That cuts the output dimension way
+down.
 
 ### Conditional VAE
 
-Encoder takes the condition embedding and the one-hot date and produces
-`(mu, logvar)`. Decoder takes a latent sample plus the condition embedding and
-reconstructs the date. Loss is cross-entropy on the (day, year-digit) pair plus
-KL divergence with beta annealing over the first 30 epochs (otherwise the KL
-collapses the latent space early and the model just ignores `z`).
+Encoder takes the condition embedding plus the one-hot date and outputs
+`(mu, logvar)`. Decoder takes a `z` sample plus the condition embedding and
+reconstructs the date. Loss is cross-entropy on (day, year-digit) plus the
+usual KL term. I anneal beta from 0 up to 1 over the first 30 epochs because
+without that the KL just collapses the latent space and the decoder learns to
+ignore `z`.
 
 ### Seq2Seq Transformer
 
-Encoder takes the four condition tokens as a length-4 sequence (each position
-has its own embedding table since the vocabularies differ). Decoder generates
-the date one character at a time. Standard teacher forcing during training,
-greedy decoding at inference. This was the cleanest performer.
+Encoder side: the four conditions become a length-4 source sequence. Each
+position has its own embedding table because the four vocabularies don't
+overlap (7 weekdays, 12 months, 2 leap values, 41 decades). Decoder side:
+generate the date one character at a time with greedy decoding at inference.
+This one was the most reliable across runs, which is why it's the default in
+`predict.py`.
 
 ### Seq2Seq LSTM
 
-Same idea as the Transformer but the encoder is just a small MLP that turns the
-four conditions into the initial hidden state for a 2-layer LSTM decoder. It
-generates the date character by character.
+Same generation idea as the Transformer but the encoder is just a small MLP
+that produces the initial `(h0, c0)` for a 2-layer LSTM decoder. Cheaper to
+train than the Transformer. Slightly worse weekday CSR in my runs but not by
+a huge amount.
 
-## Evaluation
+## What CSR actually measures
 
-The CSR metric reports six numbers per epoch:
+Per epoch the validation loop reports six numbers:
 
-- `valid`  - the string parses as a real date
-- `day`    - the weekday matches
-- `month`  - the month matches
-- `leap`   - the leap-year flag matches
-- `decade` - the decade matches
-- `all`    - every condition passes (this is the headline number)
+- `valid`: the output parses as a real calendar date
+- `day`: the weekday lines up with the condition
+- `month`: the month lines up
+- `leap`: leap-year flag lines up
+- `decade`: decade lines up
+- `all`: everything passes simultaneously. This is the headline number.
 
-`month` and `decade` should be near 1.0 since they come straight from the
-conditions through the decoding step. The hard parts are `day` (weekday
-consistency) and the joint `all`.
+`month` and `decade` should sit near 1.0 because they come from the conditions
+through the decoding step. The hard ones are `day` (weekday consistency, which
+depends on the full calendar) and `all` (the conjunction).
 
-## Notes
+## Random notes
 
-- Dataset covers years 1800 to 2200. About 146k samples, one per day in that
-  range, in chronological order. I shuffle inside the DataLoader.
-- I use a 90/10 train/val split with a fixed seed so the metric numbers are
-  comparable between runs.
-- The `BOS`/`EOS`/`PAD` tokens for the seq2seq models live in the char
-  vocabulary alongside digits and the `-` separator. Total vocab size is 14.
+The dataset spans 1800 to 2200, one entry per day, in chronological order.
+That's where the 146k comes from. Shuffling happens inside the DataLoader, not
+in the file.
 
-## Author
+Train/val split is 90/10 with a fixed seed so CSR numbers between runs are
+roughly comparable.
 
-Built for the GANs course assignment at Zewail City of Science and Technology.
+For the seq2seq models the character vocabulary is digits, the `-` separator,
+plus `BOS`, `EOS`, `PAD`. 14 tokens total.
+
+The calendar fallback in `predict.py` is a safety net, not the main thing
+doing the work. A healthy model should only fire it on a handful of edge
+cases. If you see it firing a lot, training probably didn't go well.
