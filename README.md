@@ -193,7 +193,7 @@ runs a small calendar search to find a valid date matching the
 conditions and uses that. It prints how many predictions had to be
 fixed up, which doubles as a sanity check on model quality.
 
-## What I learned from running this
+## CLOs
 
 The encouraging part is that every model picks up the structure of a
 date string surprisingly fast. The Transformer and LSTM hit 1.0 on
