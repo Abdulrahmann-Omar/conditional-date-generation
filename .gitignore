@@ -1,0 +1,45 @@
+# python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+# virtual envs
+.venv/
+venv/
+env/
+.env
+
+# jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# model checkpoints (too big for git, regenerate by training)
+model/*/weights/*.pt
+model/*/weights/*.pth
+
+# training artifacts
+runs/
+logs/
+outputs/
+*.log
+
+# scratch
+scratch/
