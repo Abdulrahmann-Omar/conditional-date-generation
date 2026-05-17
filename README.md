@@ -1,110 +1,84 @@
 # Generative date models
 
-GANs course, assignment 2. Given four conditions (day of week, month, leap-year
-flag, decade), generate a date that satisfies all of them.
+GANs course, assignment 2.
 
-I built four models so I could compare them. Two come from the course (a
-Conditional GAN, which the assignment requires, and a Conditional VAE). The
-other two are seq2seq models that aren't in the course: a Transformer and an
-LSTM. The Transformer is what `predict.py` calls by default because it was the
-most consistent on the weekday check in my runs, but you can pick any of the
-four with `--model`.
+Given four conditions:
 
-The thing that took me the longest wasn't actually the models. It was figuring
-out a metric that made sense. More on that below.
+- day of the week (`MON`..`SUN`)
+- month (`JAN`..`DEC`)
+- leap-year flag (`True`/`False`)
+- decade (the first three digits of the year)
 
-## What's in here
+generate a date `d-m-yyyy` that satisfies all of them.
+
+The repo is split in two folders. Version 1 has the four models the
+course actually asked for. Version 2 adds two diffusion models I wanted
+to try and was curious whether they'd beat the rest.
 
 ```
 .
-├── data/
-│   ├── data.txt              # ~146k labelled examples
-│   └── example_input.txt     # 1464 unlabelled queries
-├── model/
-│   ├── predict.py            # inference entry point
-│   ├── utils/                # tokenizer, dataset, CSR metric
-│   ├── gan/                  # Conditional GAN
-│   ├── vae/                  # Conditional VAE
-│   ├── transformer/          # Seq2Seq Transformer
-│   └── lstm/                 # Seq2Seq LSTM
-├── environment.yml
-└── README.md
+├── version(1)/   GAN, VAE, Seq2Seq Transformer, Seq2Seq LSTM
+├── version(2)/   D3PM and Diffusion-LM (trained on Modal.com)
+└── Assignment.md
 ```
 
-Inside each model folder there's a `model.py` for the architecture, a
-`train.py` that handles the training loop, and a `weights/` folder where
-checkpoints land.
+Both versions can train on Modal. Version 1 also has a local training
+script (`python -m gan.train` and friends) in case you want to grind on
+CPU instead.
 
-## Setup
+## Results
 
-```bash
-conda env create -f environment.yml
-conda activate dates_gen
-```
+All numbers below are best-epoch validation **Condition Satisfaction
+Rate** (CSR): the fraction of generated dates that pass each condition
+check. `all` is the fraction that pass every check simultaneously, which
+is the metric I actually care about.
 
-No CUDA GPU? Strip the `pytorch-cuda` line out of `environment.yml` before
-running the create command. Training on CPU works, it's just slow.
+Trained on a 90/10 train/val split of the 146k examples in `data.txt`.
+v1 models ran 20 epochs on an A10G; v2 models ran 25 epochs on an A10G.
 
-## Training
+<!-- RESULTS_TABLE_START -->
 
-Run from inside `model/`:
+| Model                | valid | weekday | month | leap  | decade | **all**   |
+|----------------------|------:|--------:|------:|------:|-------:|----------:|
+| GAN (v1)             | 0.998 |   0.145 | 0.998 | 0.778 |  0.998 | **0.116** |
+| VAE (v1)             | 0.980 |   0.144 | 0.980 | 0.755 |  0.980 | **0.111** |
+| Transformer (v1)     | 1.000 |   0.149 | 1.000 | 1.000 |  1.000 | **0.149** |
+| LSTM (v1)            | 1.000 |   0.151 | 1.000 | 1.000 |  1.000 | **0.151** |
+| D3PM (v2)            | 0.992 |   0.150 | 0.992 | 0.991 |  0.992 | **0.150** |
+| Diffusion-LM (v2)    | 0.988 |   0.145 | 0.988 | 0.961 |  0.988 | **0.141** |
 
-```bash
-python -m gan.train
-python -m vae.train
-python -m transformer.train
-python -m lstm.train
-```
+<!-- RESULTS_TABLE_END -->
 
-Each epoch prints the validation **CSR** (condition satisfaction rate): the
-share of generated dates that pass all four condition checks. The best
-checkpoint by CSR ends up at `<model>/weights/best.pt`.
+A few things jump out from this table. `month`, `decade`, `leap`, and
+`valid` get most of the way to 1.0 for every model, because those
+conditions are basically given by the inputs and the model just has to
+not mess up the decoding step.
 
-I went with CSR over accuracy because lots of different dates satisfy the same
-condition set, so asking the model to recover the exact one from the training
-data didn't really test what we care about. CSR tests the thing we actually
-want: did the model produce a date that fits the conditions, regardless of
-which one.
+The weekday column is the one I actually care about, and it sits stuck
+around 0.14-0.15 for every single model. That's not coincidence: random
+chance on a 7-way weekday is 1/7 ≈ 0.143. None of these architectures
+genuinely learns the calendar. They learn how a date string looks, they
+nail the three easy conditions, and then they guess the day. So the
+weekday CSR matches what you'd get from picking a day uniformly.
 
-## Prediction
+D3PM did beat the v1 sequence models very slightly (0.150 vs ~0.149).
+Diffusion-LM was a touch worse (0.141). Within noise, honestly. The big
+takeaway is that none of the six approaches escape the random-guess
+floor on the calendar lookup.
 
-Once a model has a saved `best.pt`:
-
-```bash
-cd model
-python predict.py -i ../data/example_input.txt -o ../outputs/preds.txt
-```
-
-To use a specific model instead of the default:
-
-```bash
-python predict.py -i ../data/example_input.txt -o ../outputs/preds.txt --model vae
-python predict.py -i ../data/example_input.txt -o ../outputs/preds.txt --model gan
-python predict.py -i ../data/example_input.txt -o ../outputs/preds.txt --model lstm
-```
-
-If the model produces something invalid (wrong weekday, April 31st, that kind
-of thing), the script runs a small calendar search to find a date that does
-fit the conditions and uses that instead. It prints how many times it had to
-do this, which is a nice sanity check on the model's quality.
+That's the reason `predict.py` has a calendar fallback at the end:
+the models give you a well-formed date with three correct conditions,
+and the fallback fixes the weekday before anything gets written out.
 
 ## Input format
 
-One line per query, four bracketed tokens:
+One line per query. Four bracketed tokens:
 
 ```
 [DAY] [MONTH] [LEAP] [DECADE]
 ```
 
-- `DAY`: `MON TUE WED THU FRI SAT SUN`
-- `MONTH`: `JAN FEB MAR ... DEC`
-- `LEAP`: `True` or `False`
-- `DECADE`: the first three digits of the year (`180` covers 1800-1809,
-  `220` covers 2200-2209)
-
-### Sample input
-
-The first ten lines of `data/example_input.txt`:
+Concrete sample (the first ten lines of `data/example_input.txt`):
 
 ```
 [WED] [JAN] [False] [180]
@@ -121,10 +95,7 @@ The first ten lines of `data/example_input.txt`:
 
 ## Output format
 
-Same conditions, with a `d-m-yyyy` date stuck on the end. Day and month aren't
-zero-padded.
-
-### Sample output
+Same line, with a `d-m-yyyy` date appended (no zero-padding on day/month):
 
 ```
 [WED] [JAN] [False] [180] 1-1-1800
@@ -139,78 +110,119 @@ zero-padded.
 [TUE] [MAR] [False] [189] 4-3-1890
 ```
 
-Pick any line and check by hand. `1-1-1800` was a Wednesday in January, the
-year isn't a leap year, the decade is 1800-1809. `1-1-2000` was a Saturday,
-January, 2000 *is* a leap year (divisible by 400), still in the 2000s decade.
-Both work.
+You can verify by hand: `1-1-1800` was a Wednesday, January, 1800 was
+not a leap year, lands in decade 180. `1-1-2000` was a Saturday, January,
+2000 *is* a leap year (divisible by 400), decade 200. Both check out.
 
-## The models
+## Setup
 
-### Conditional GAN
+### Local environment (version 1)
 
-Noise vector plus four condition embeddings go in. Out come soft distributions
-over day-of-month and the last digit of the year. The discriminator gets the
-date and the conditions and scores how real it looks. Standard BCE loss,
-label-smoothed reals at 0.9 to keep D from getting cocky. G updates twice per
-D step because in early experiments D was running away with it otherwise.
+```bash
+cd "version(1)"
+conda env create -f environment.yml
+conda activate dates_gen
+```
 
-I'm not asking the model to predict month or decade. The conditions already
-pin those down, so the generator only learns the part that's actually
-unknown: day and the trailing year digit. That cuts the output dimension way
-down.
+If you don't have a CUDA GPU, remove the `pytorch-cuda` line from
+`environment.yml`. Training on CPU works but takes a while.
 
-### Conditional VAE
+### Modal (both versions)
 
-Encoder takes the condition embedding plus the one-hot date and outputs
-`(mu, logvar)`. Decoder takes a `z` sample plus the condition embedding and
-reconstructs the date. Loss is cross-entropy on (day, year-digit) plus the
-usual KL term. I anneal beta from 0 up to 1 over the first 30 epochs because
-without that the KL just collapses the latent space and the decoder learns to
-ignore `z`.
+```bash
+pip install modal
+modal setup
+```
 
-### Seq2Seq Transformer
+That's all. Modal handles the GPU, Python, container image, and the
+persistent volume for checkpoints.
 
-Encoder side: the four conditions become a length-4 source sequence. Each
-position has its own embedding table because the four vocabularies don't
-overlap (7 weekdays, 12 months, 2 leap values, 41 decades). Decoder side:
-generate the date one character at a time with greedy decoding at inference.
-This one was the most reliable across runs, which is why it's the default in
-`predict.py`.
+## Training
 
-### Seq2Seq LSTM
+### Version 1 (local or Modal)
 
-Same generation idea as the Transformer but the encoder is just a small MLP
-that produces the initial `(h0, c0)` for a 2-layer LSTM decoder. Cheaper to
-train than the Transformer. Slightly worse weekday CSR in my runs but not by
-a huge amount.
+Local:
 
-## What CSR actually measures
+```bash
+cd "version(1)/model"
+python -m gan.train
+python -m vae.train
+python -m transformer.train
+python -m lstm.train
+```
 
-Per epoch the validation loop reports six numbers:
+Modal (all four in parallel on A10G GPUs):
 
-- `valid`: the output parses as a real calendar date
-- `day`: the weekday lines up with the condition
-- `month`: the month lines up
-- `leap`: leap-year flag lines up
-- `decade`: decade lines up
-- `all`: everything passes simultaneously. This is the headline number.
+```bash
+cd "version(1)"
+modal run modal_train.py --model all --epochs 25
+```
 
-`month` and `decade` should sit near 1.0 because they come from the conditions
-through the decoding step. The hard ones are `day` (weekday consistency, which
-depends on the full calendar) and `all` (the conjunction).
+### Version 2 (Modal only)
 
-## Random notes
+```bash
+cd "version(2)"
+modal run modal_train.py --model both --epochs 25
+```
 
-The dataset spans 1800 to 2200, one entry per day, in chronological order.
-That's where the 146k comes from. Shuffling happens inside the DataLoader, not
-in the file.
+Checkpoints land on Modal volumes named `date-models-v1-weights` and
+`date-diffusion-weights` respectively. To pull a checkpoint back:
 
-Train/val split is 90/10 with a fixed seed so CSR numbers between runs are
-roughly comparable.
+```bash
+modal volume get date-models-v1-weights      /gan/best.pt  ./gan_best.pt
+modal volume get date-diffusion-weights      /d3pm/best.pt ./d3pm_best.pt
+```
 
-For the seq2seq models the character vocabulary is digits, the `-` separator,
-plus `BOS`, `EOS`, `PAD`. 14 tokens total.
+## Inference
 
-The calendar fallback in `predict.py` is a safety net, not the main thing
-doing the work. A healthy model should only fire it on a handful of edge
-cases. If you see it firing a lot, training probably didn't go well.
+After downloading the relevant checkpoint:
+
+```bash
+# version 1
+cd "version(1)/model"
+python predict.py -i ../data/example_input.txt -o ../out.txt --model transformer
+
+# version 2
+cd "version(2)"
+python predict.py -i data/example_input.txt -o out.txt --model d3pm
+python predict.py -i data/example_input.txt -o out.txt --model diffusion_lm
+```
+
+If the model generates an invalid date or a wrong weekday, the script
+runs a small calendar search to find a valid date matching the
+conditions and uses that. It prints how many predictions had to be
+fixed up, which doubles as a sanity check on model quality.
+
+## What I learned from running this
+
+The encouraging part is that every model picks up the structure of a
+date string surprisingly fast. The Transformer and LSTM hit 1.0 on
+`valid` after a few epochs because they emit characters one at a time
+and the format is easy. The GAN and VAE sit slightly below 1.0 because
+they predict `(day, year_digit)` separately and occasionally produce a
+day-of-month that doesn't exist (April 31, that kind of thing). The two
+diffusion models behave like the seq2seq ones: high `valid`, high
+`month`, high `decade`, all clearly thanks to the conditions being fed
+in at every step.
+
+The discouraging part is that the weekday never really moves. I tried
+both the obvious thing (longer training) and the not-so-obvious thing
+(bigger model, different schedule for D3PM), and the curve always
+plateaus at 1/7. There's no signal in the data the way the conditions
+encode it, because the model would need to internalise the Gregorian
+calendar to do better. With 146k examples and no calendar inductive
+bias, this just doesn't happen.
+
+So practically, the calendar fallback in `predict.py` is what makes
+the final output usable. The model takes care of three out of four
+conditions; the fallback handles the weekday lookup. If a model is
+actually trained, the fallback fires on roughly 85% of predictions
+(because the weekday is wrong 6/7 of the time). If a model is broken
+or untrained, it fires on 100%.
+
+## Folder summaries
+
+See `version(1)/README.md` for the four base models, and
+`version(2)/README.md` for the diffusion models. Both folder READMEs
+have implementation notes that are too detailed for this top-level
+overview.

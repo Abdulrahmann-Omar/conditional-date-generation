@@ -32,8 +32,10 @@ env/
 Thumbs.db
 
 # model checkpoints (too big for git, regenerate by training)
-model/*/weights/*.pt
-model/*/weights/*.pth
+version*/model/*/weights/*.pt
+version*/model/*/weights/*.pth
+version*/weights/
+weights/
 
 # training artifacts
 runs/
